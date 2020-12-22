@@ -1,23 +1,23 @@
 <?php
 
 /**
- * yform
+ * yform.
  * @author jan.kristinus[at]redaxo[dot]org Jan Kristinus
  * @author <a href="http://www.yakamara.de">www.yakamara.de</a>
  */
 
 echo rex_view::title(rex_i18n::msg('yform_geo'));
-
-$table_name = rex_request('table_name','string');
-$table = NULL;
+$table_name = rex_request('table_name', 'string');
+$table = null;
 
 $tables = rex_yform_manager_table::getAll();
 $geo_tables = [];
-foreach($tables as $i_table) {
-    $fields = $i_table->getValueFields(array('type_name' => 'google_geocode'));
+foreach ($tables as $i_table) {
+    $fields = $i_table->getValueFields(['type_name' => 'google_geocode']);
     if (count($fields) > 0) {
         if ($table_name == $i_table->getTableName()) {
             $table = $i_table;
+            $geo_tables[] = $i_table;
             break;
         }
         $geo_tables[] = $i_table;
@@ -25,21 +25,18 @@ foreach($tables as $i_table) {
 }
 
 if (count($geo_tables) == 0) {
-
-    echo rex_view::info($this->i18n("geo_nogeotablefound"));
-
-} else if (!$table) {
-
+    echo rex_view::info($this->i18n('geo_nogeotablefound'));
+} elseif (!$table) {
     $content = [];
-    foreach($geo_tables as $g_table) {
-        $content[] = '<a href="index.php?page=yform/geo/index/&table_name='.$g_table->getTableName().'" class="btn btn-setup">'.$g_table->getTableName().'</a>';
 
+    foreach ($geo_tables as $g_table) {
+        $content[] = '<a href="index.php?page=yform/geo/index/&table_name=' . $g_table->getTableName() . '" class="btn btn-setup">' . $g_table->getTableName() . '</a>';
     }
-    $content = '<p>'.implode("<br /><br />", $content).'</p>';
+    $content = '<p>' . implode('<br /><br />', $content) . '</p>';
 
     $fragment = new rex_fragment();
     $fragment->setVar('title', $this->i18n('geo_choosetable'), false);
-    $fragment->setVar('body', $content , false);
+    $fragment->setVar('body', $content, false);
     echo $fragment->parse('core/page/section.php');
 
 } else {
@@ -50,39 +47,45 @@ if (count($geo_tables) == 0) {
     $gd = rex_sql::factory();
 
     if ($func == 'get_data') {
-        $data = array();
+        $data = [];
         ob_end_clean();
         if (array_key_exists($field, $fields)) {
             $address_fields = explode(',', $fields[$field]['address']);
-            $fs = array();
+            $fs = [];
             foreach ($address_fields as $f) {
                 $fs[] = $gd->escapeIdentifier(trim($f));
             }
             $concat = 'CONCAT(' . implode(' , ",", ', $fs) . ') as address';
 
-            $pos_fields = explode(',', $fields[$field]['position']);
-            if (count($pos_fields) == 2) {
-                $pos_lat = $pos_fields[0];
-                $pos_lng = $pos_fields[1];
-                // $gd->setDebug();
-                $gd->setQuery('select id, ' . $concat . ' from ' . $table['table_name'] . ' where ' . $pos_lng . '="" or ' . $pos_lng . ' IS NULL or ' . $pos_lat . '="" or ' . $pos_lat . ' IS NULL LIMIT 200');
-                $data = ($gd->getArray());
-            }
+            $pos_field = $fields[$field]->getName();
+            $gd->setQuery('select id, ' . $concat . ' from ' . $table['table_name'] . ' where ' . $pos_field . '="0,0" or ' . $pos_field . '="0.000,0.000" or ' . $pos_field . '="" or ' . $pos_field . ' IS NULL IS NULL LIMIT 200');
+            $data = ($gd->getArray());
         }
         echo json_encode($data);
         exit;
-
     } elseif ($func == 'save_data') {
         ob_end_clean();
         $data = '0';
+
         if (array_key_exists($field, $fields)) {
             $data_lng = rex_request('geo_lng', 'string');
             $data_lat = rex_request('geo_lat', 'string');
             $data_id = rex_request('geo_id', 'int', 0);
-            $pos_fields = explode(',', $fields[$field]['position']);
-            if (count($pos_fields) == 2) {
-                $pos_lat = $pos_fields[0];
-                $pos_lng = $pos_fields[1];
+            $pos_field = $fields[$field]->getName();
+            if (count($pos_field) == 1) {
+                $gd = rex_sql::factory();
+                $gd->setQuery('select id, ' . $gd->escapeIdentifier($pos_field) . ' from ' . $table['table_name'] . ' where id = ' . $gd->escape($data_id));
+                if ($gd->getRows() == 1 && $data_lng != '' && $data_lat != '') {
+                    $sd = rex_sql::factory();
+                    $sd->setTable($table['table_name']);
+                    $sd->setWhere('id=' . $data_id);
+                    $sd->setValue($pos_field, $data_lat . ',' . $data_lng);
+                    $sd->update();
+                    $data = '1';
+                }
+            } else if (count($pos_field) == 2) {
+                $pos_lat = $pos_field[0];
+                $pos_lng = $pos_field[1];
                 $gd = rex_sql::factory();
                 $gd->setQuery('select id, ' . $gd->escapeIdentifier($pos_lat) . ', ' . $gd->escapeIdentifier($pos_lng) . ' from ' . $table['table_name'] . ' where id = ' . $gd->escape($data_id) . '');
                 if ($gd->getRows() == 1 && $data_lng != '' && $data_lat != '') {
@@ -99,12 +102,16 @@ if (count($geo_tables) == 0) {
         echo $data;
         exit;
     }
+    $sql = rex_sql::factory();
+    $googleapikey = $sql->setDBQuery('SELECT * FROM rex_yform_field WHERE table_name = :table AND type_name = "google_geocode"', ['table' => $table['table_name']])->getValue('googleapikey');
 
-    echo '<script type="text/javascript" src="//maps.google.com/maps/api/js?sensor=true"></script>';
+    if ($googleapikey) {
+        echo '<script type="text/javascript" src="//maps.googleapis.com/maps/api/js?key=' . $googleapikey . '&sensor=true"></script>';
+    } else {
+        echo '<script type="text/javascript" src="//maps.google.com/maps/api/js?sensor=true"></script>';
+    }
 
     echo '<script type="text/javascript">
-    <!--
-
     var data = "";
     var table = "";
     var field = "";
@@ -121,6 +128,7 @@ if (count($geo_tables) == 0) {
         field = fieldm;
         var currentTime = new Date();
         link = "index.php?page=yform/geo/index&table_name="+table+"&geo_func=get_data&geo_field="+field+"&nocache="+currentTime.getTime();
+        
         geocoder = new google.maps.Geocoder();
         jQuery.ajax({
             url: link,
@@ -134,7 +142,6 @@ if (count($geo_tables) == 0) {
                 alert("error loading "+link);
             }
         });
-
     }
 
     function yform_geo_update()
@@ -156,46 +163,47 @@ if (count($geo_tables) == 0) {
                     jQuery.ajax({
                         url: data_link,
                         success: function(data_status){
+                            data_next = "1";
+                            jQuery("#yform_geo_count_"+field).html(jQuery("#yform_geo_count_"+field).html()+"<p >Datensätze erfolgreich aktualisiert.</p>");
+
                             if(data_status == "1") {
                                 jQuery("#yform_geo_count_"+field).html(jQuery("#yform_geo_count_"+field).html()+". ");
-                                data_next = "1";
+                                
                             }else {
-                                // alert("data status" + data_status);
+                                
+                                //alert("data status" + data_status);
                             }
                         }
                     });
-                }else {
+                } else {
+                    
                     // no result found
-                    // alert("no result found: "+status);
+                    //alert("no result found: "+status);
                 }
-            }else {
+            } else {
+               
                 // status = ZERO_RESULTS, QUERY_LIMIT
-                // alert("not possible: "+status)
+                //alert("not possible: "+status)
             }
         });
 
         data_counter = data_counter + 1;
 
         if(data_next == "0") {
-            jQuery("#yform_geo_count_"+field).html(jQuery("#yform_geo_count_"+field).html()+"<a href=\"index.php?page=yform/manager/data_edit&table_name="+table+"&data_id="+data_id+"&func=edit&start=\">Geocoding not possible, try manually [id=\""+data_id+"\"]</a>");
+          // jQuery("#yform_geo_count_"+field).html(jQuery("#yform_geo_count_"+field).html()+"<a href=\"index.php?page=yform/manager/data_edit&table_name="+table+"&data_id="+data_id+"&func=edit&start=\">Geocoding not possible, try manually [id=\""+data_id+"\"]</a>");
             // return false;
         }
-        setTimeout("yform_geo_update()",1000);
-
+        setTimeout("yform_geo_update()", 500);
     }
-
-    -->
     </script>';
 
-    $content = '<p>'.$this->i18n('geo_tagginginfo').'</p>';
+    $content = '<p>' . $this->i18n('geo_tagginginfo') . '</p>';
     foreach ($fields as $k => $v) {
-        $content .= '<p><a class="btn btn-setup" href="javascript:yform_geo_updates(\'' . $table['table_name'] . '\',\'' . $k . '\')">Google Geotagging starten</a> &nbsp;Hiermit werden alle Datensätze anhand des Felder "' . $k . '" nach fehlenden Geopositionen durchsucht und neu gesetzt. <br /><br />[<span id="yform_geo_count_' . $k . '"></span>]</p>';
+        $content .= '<p><a class="btn btn-setup" onclick="return yform_geo_updates(\'' . $table['table_name'] . '\',\'' . $k . '\');">Google Geotagging starten</a> &nbsp;Hiermit werden alle Datensätze anhand des Felder "' . $k . '" nach fehlenden Geopositionen durchsucht und neu gesetzt. <br /><br />[<span id="yform_geo_count_' . $k . '"></span>]</p>';
     }
 
     $fragment = new rex_fragment();
     $fragment->setVar('title', $this->i18n('geo_tagging', $table['table_name']), false);
-    $fragment->setVar('body', $content , false);
+    $fragment->setVar('body', $content, false);
     echo $fragment->parse('core/page/section.php');
-
-
 }
